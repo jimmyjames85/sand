@@ -2,41 +2,35 @@ package graphite
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
 	"io"
 	"log"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
-	"image"
-	"image/color"
-	"math/rand"
 )
 
-type fPoint struct {
-	X float64
-	Y float64
+var (
+	RED   = color.RGBA{255, 0, 0, 255}
+	BLACK = color.RGBA{0, 0, 0, 255}
+)
+
+type TimeValue struct {
+	Time  time.Time
+	Value float64
 }
 
-type metric struct {
-	TargetName string        `json:"target"`
-	Start      time.Time     `json:"start"`
-	End        time.Time     `json:"end"`
-
-	
-	Data       []fPoint     `json:"data"`
-
-}
-
-type RawData struct {
-	TargetName string        `json:"target"`
+type Metric struct {
+	Name       string
 	Start      time.Time     `json:"start"`
 	End        time.Time     `json:"end"`
 	Step       time.Duration `json:"step"`
-	Data       []float64     `json:"data"`
-	DataMin    float64
-	DataMax    float64
+	MinValue   float64
+	MaxValue   float64
+	TimeValues []TimeValue
 }
 
 func randColor() color.RGBA {
@@ -47,102 +41,129 @@ func randColor() color.RGBA {
 		255,
 	}
 }
+func DrawRectangle(img *image.RGBA, r image.Rectangle, c color.Color) {
+	x0 := r.Min.X
+	y0 := r.Min.Y
+	x1 := r.Max.X
+	y1 := r.Max.Y
 
-func drawLine(m *image.RGBA, min, max image.Point, c color.Color) {
+	log.Printf("%d %d %d %d\n", x0, y0, x0, y1)
+	log.Printf("%d %d %d %d\n", x0, y1, x1, y1)
+	log.Printf("%d %d %d %d\n", x1, y1, x1, y0)
+	log.Printf("%d %d %d %d\n", x1, y0, x0, y0)
 
-	if max.X < min.X {
-		min, max = max, min
-	}
+	drawLine(img, x0, y0, x0, y1, c)
+	drawLine(img, x0, y1, x1, y1, c)
+	drawLine(img, x1, y1, x1, y0, c)
+	drawLine(img, x1, y0, x0, y0, c)
+}
 
-	if max.X == min.X {
+func drawLineP(img *image.RGBA, min, max image.Point, c color.Color) {
+	drawLine(img, min.X, min.Y, max.X, max.Y, c)
+}
+
+func drawLine(img *image.RGBA, x0, y0, x1, y1 int, c color.Color) {
+
+	if x1 < x0 {
+		//x0 should be first
+		x0, x1 = x1, x0
+		y0, y1 = y1, y0
+	} else if x1 == x0 {
 		//vertical line
-		if min.Y <= max.Y {
-			for y := min.Y; y <= max.Y; y++ {
-				m.Set(min.X, y, c)
+		if y0 <= y1 {
+			for y := y0; y <= y1; y++ {
+				img.Set(x0, y, c)
 			}
 		} else {
-			for y := max.Y; y <= min.Y; y++ {
-				m.Set(min.X, y, c)
+			for y := y1; y <= y0; y++ {
+				img.Set(x0, y, c)
 			}
 		}
 		return
 	}
 
-	slope := float64(max.Y - min.Y) / float64(max.X - min.X)
-	b := float64(min.Y) - slope * float64(min.X)
+	slope := float64(y1-y0) / float64(x1-x0)
+	b := float64(y0) - slope*float64(x0)
 
-	for x := min.X; x <= max.X; x++ {
-		y := slope * float64(x) + b
-		m.Set(x, int(y), c)
+	for x := x0; x <= x1; x++ {
+		y := slope*float64(x) + b
+		img.Set(x, int(y), c)
 	}
 
-	if min.Y <= max.Y {
-		for y := min.Y; y <= max.Y; y++ {
+	if y0 <= y1 {
+		for y := y0; y <= y1; y++ {
 			x := (float64(y) - b) / slope
-			m.Set(int(x), y, c)
+			img.Set(int(x), y, c)
 		}
 	} else {
-		for y := max.Y; y <= min.Y; y++ {
+		for y := y1; y <= y0; y++ {
 			x := (float64(y) - b) / slope
-			m.Set(int(x), y, c)
+			img.Set(int(x), y, c)
 		}
 	}
-
 }
 
-func (rd *RawData) Image(r image.Rectangle) image.Image {
+func (m *Metric) Image(r image.Rectangle, t0 time.Time, v0 float64, t1 time.Time, v1 float64) *image.RGBA {
 
-	m := image.NewRGBA(r)
-	xFactor := float64(r.Dx()) / float64(rd.End.Unix() - rd.Start.Unix())
-	yFactor := float64(r.Dy()) / float64(rd.DataMax - rd.DataMin)
-	if (rd.DataMax - rd.DataMin) == 0 {
+	if t1.Before(t0) {
+		log.Fatal("t1 < t0")
+	}
+
+	img := image.NewRGBA(r)
+	rr := r
+	rr.Max.X = rr.Max.X - 1
+	rr.Max.Y = rr.Max.Y - 1
+	DrawRectangle(img, rr, BLACK)
+
+
+	m.Start.Sub(t0)
+
+	//xFactor := float64(r.Dx()) / float64(m.End.Unix()- m.Start.Unix())
+	xFactor := float64(r.Dx()) / float64(t1.Sub(t0))
+	yFactor := float64(r.Dy()) / float64(m.MaxValue-m.MinValue)
+	if (m.MaxValue - m.MinValue) == 0 {
 		yFactor = 1
 	}
 
-	cur := image.Point{X:0, Y:0}
+	var cur image.Point
 
-	t := rd.Start
-	for _, v := range rd.Data {
-		///draw x,y
+	tOffset := m.Start.Sub(t0)
 
+	for i, tv := range m.TimeValues {
+
+		//x := xFactor * float64(tOffset+tv.Time.Sub(m.Start))
+		x := xFactor * float64(tOffset+tv.Time.Sub(m.Start))
 		next := image.Point{
-			X: int(float64(int64(t.Sub(rd.Start))) * xFactor),
-			Y:int((v - rd.DataMin) * yFactor),
+			X: int(x),
+			//X: int(float64(int64(tv.Time.Sub(m.Start) -tOffset)) * xFactor),
+			Y: int((tv.Value - m.MinValue) * yFactor),
+			//X: int(float64(int64(t.Sub(rd.Start))) * xFactor),
+			//Y: int((v.Value - rd.MinValue) * yFactor),
 		}
-		drawLine(m, cur, next, color.RGBA{255, 0, 0, 255})
+
+		if i > 0 {
+			///draw x,y
+			drawLineP(img, cur, next, RED)
+		}
 		cur = next
-		t = t.Add(rd.Step)
+
 	}
 
-	return m
+
+	return img
 }
 
-func (rd *RawData) ToJSON() string {
-	b, err := json.Marshal(rd)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return string(b)
-}
+func ParseMetrics(r *bufio.Reader) ([]*Metric, error) {
 
-func (rd *RawData) String() string {
-	return rd.ToJSON()
-}
-
-func ParseRawData(r *bufio.Reader) ([]RawData, error) {
-
-	ret := make([]RawData, 0)
+	ret := make([]*Metric, 0)
 
 	line, err := r.ReadString('\n')
 	for err == nil {
-
-		rd, perr := parseSingleRawData(line)
+		m, perr := parseMetric(line)
 		if perr != nil {
 			return ret, perr
 		}
-
-		ret = append(ret, *rd)
-
+		ret = append(ret, m)
 		line, err = r.ReadString('\n')
 	}
 
@@ -150,17 +171,14 @@ func ParseRawData(r *bufio.Reader) ([]RawData, error) {
 		return ret, err
 	}
 	return ret, nil
-
 }
 
-// parseSingleRawData parses one line of data which represents a single target
-//
-// @see graphite.readthedocs.io/en/latest/render_api.html
-func parseSingleRawData(data string) (*RawData, error) {
+func parseMetric(data string) (*Metric, error) {
 
 	data = strings.Trim(data, " \n\t")
-	rd := &RawData{
-		Data: make([]float64, 0),
+
+	ret := &Metric{
+		TimeValues: make([]TimeValue, 0),
 	}
 
 	fields := strings.Split(data, "|")
@@ -170,57 +188,57 @@ func parseSingleRawData(data string) (*RawData, error) {
 	dataPoints := strings.Split(fields[1], ",")
 	fields = strings.Split(fields[0], ",")
 
+	if len(fields) != 4 {
+		return nil, fmt.Errorf("unexpected format")
+	}
+
+	ret.Name = fields[0]
+
+	timestamp, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	ret.Start = time.Unix(timestamp, 0)
+
+	timestamp, err = strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	ret.End = time.Unix(timestamp, 0)
+
+	timestep, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	ret.Step = time.Second * time.Duration(timestep)
+
+	t := ret.Start
 	for i, p := range dataPoints {
+		if strings.Index(p, "None") < 0 {
+			fp, err := strconv.ParseFloat(p, 64)
+			if err != nil {
+				return nil, err
+			}
 
-		if strings.Index(p, "None") == 0 {
-			rd.Data = append(rd.Data, 0.0) //TODO
-			continue
-		}
+			ret.TimeValues = append(ret.TimeValues, TimeValue{
+				Time:  t,
+				Value: fp,
+			})
 
-		fp, err := strconv.ParseFloat(p, 64)
-		if err != nil {
-			return nil, err
-		}
+			if i == 0 {
+				ret.MinValue = fp
+				ret.MaxValue = fp
+			}
 
-		if i == 0 {
-			rd.DataMin = fp
-			rd.DataMax = fp
+			if ret.MinValue > fp {
+				ret.MinValue = fp
+			}
+			if ret.MaxValue < fp {
+				ret.MaxValue = fp
+			}
 		}
-
-		if rd.DataMin > fp {
-			rd.DataMin = fp
-		}
-		if rd.DataMax < fp {
-			rd.DataMax = fp
-		}
-		rd.Data = append(rd.Data, fp)
+		t = t.Add(ret.Step)
 	}
 
-	for i, f := range fields {
-		switch i {
-		case 0:
-			//todo error if not all fields get populated
-			rd.TargetName = f
-		case 1:
-			timestamp, err := strconv.ParseInt(f, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			rd.Start = time.Unix(timestamp, 0)
-		case 2:
-			timestamp, err := strconv.ParseInt(f, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			rd.End = time.Unix(timestamp, 0)
-		case 3:
-			timestep, err := strconv.ParseInt(f, 10, 64)
-			if err != nil {
-				return nil, err
-			}
-			rd.Step = time.Duration(timestep)
-		}
-	}
-
-	return rd, nil
+	return ret, nil
 }
