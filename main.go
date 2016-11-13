@@ -10,6 +10,8 @@ import (
 
 	"github.com/andlabs/ui"
 	"github.com/jimmyjames85/sand/graphite"
+	"image/png"
+	"image"
 )
 
 func cat() {
@@ -197,7 +199,19 @@ func gui() {
 }
 
 func main() {
+	rd, err := graphite.ParseRawData(bufio.NewReader(os.Stdin))
 
-	gui()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if len(rd) >0{
+
+		err = png.Encode(os.Stdout, rd[0].Image(image.Rect(0,0,2048,1024)))
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 
 }

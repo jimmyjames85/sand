@@ -9,7 +9,25 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"image"
+	"image/color"
+	"math/rand"
 )
+
+type fPoint struct {
+	X float64
+	Y float64
+}
+
+type metric struct {
+	TargetName string        `json:"target"`
+	Start      time.Time     `json:"start"`
+	End        time.Time     `json:"end"`
+
+	
+	Data       []fPoint     `json:"data"`
+
+}
 
 type RawData struct {
 	TargetName string        `json:"target"`
@@ -19,6 +37,84 @@ type RawData struct {
 	Data       []float64     `json:"data"`
 	DataMin    float64
 	DataMax    float64
+}
+
+func randColor() color.RGBA {
+	return color.RGBA{
+		uint8(rand.Uint32() % 256),
+		uint8(rand.Uint32() % 256),
+		uint8(rand.Uint32() % 256),
+		255,
+	}
+}
+
+func drawLine(m *image.RGBA, min, max image.Point, c color.Color) {
+
+	if max.X < min.X {
+		min, max = max, min
+	}
+
+	if max.X == min.X {
+		//vertical line
+		if min.Y <= max.Y {
+			for y := min.Y; y <= max.Y; y++ {
+				m.Set(min.X, y, c)
+			}
+		} else {
+			for y := max.Y; y <= min.Y; y++ {
+				m.Set(min.X, y, c)
+			}
+		}
+		return
+	}
+
+	slope := float64(max.Y - min.Y) / float64(max.X - min.X)
+	b := float64(min.Y) - slope * float64(min.X)
+
+	for x := min.X; x <= max.X; x++ {
+		y := slope * float64(x) + b
+		m.Set(x, int(y), c)
+	}
+
+	if min.Y <= max.Y {
+		for y := min.Y; y <= max.Y; y++ {
+			x := (float64(y) - b) / slope
+			m.Set(int(x), y, c)
+		}
+	} else {
+		for y := max.Y; y <= min.Y; y++ {
+			x := (float64(y) - b) / slope
+			m.Set(int(x), y, c)
+		}
+	}
+
+}
+
+func (rd *RawData) Image(r image.Rectangle) image.Image {
+
+	m := image.NewRGBA(r)
+	xFactor := float64(r.Dx()) / float64(rd.End.Unix() - rd.Start.Unix())
+	yFactor := float64(r.Dy()) / float64(rd.DataMax - rd.DataMin)
+	if (rd.DataMax - rd.DataMin) == 0 {
+		yFactor = 1
+	}
+
+	cur := image.Point{X:0, Y:0}
+
+	t := rd.Start
+	for _, v := range rd.Data {
+		///draw x,y
+
+		next := image.Point{
+			X: int(float64(int64(t.Sub(rd.Start))) * xFactor),
+			Y:int((v - rd.DataMin) * yFactor),
+		}
+		drawLine(m, cur, next, color.RGBA{255, 0, 0, 255})
+		cur = next
+		t = t.Add(rd.Step)
+	}
+
+	return m
 }
 
 func (rd *RawData) ToJSON() string {
@@ -40,7 +136,7 @@ func ParseRawData(r *bufio.Reader) ([]RawData, error) {
 	line, err := r.ReadString('\n')
 	for err == nil {
 
-		rd, perr := ParseRawDataLine(line)
+		rd, perr := parseSingleRawData(line)
 		if perr != nil {
 			return ret, perr
 		}
@@ -56,7 +152,11 @@ func ParseRawData(r *bufio.Reader) ([]RawData, error) {
 	return ret, nil
 
 }
-func ParseRawDataLine(data string) (*RawData, error) {
+
+// parseSingleRawData parses one line of data which represents a single target
+//
+// @see graphite.readthedocs.io/en/latest/render_api.html
+func parseSingleRawData(data string) (*RawData, error) {
 
 	data = strings.Trim(data, " \n\t")
 	rd := &RawData{
