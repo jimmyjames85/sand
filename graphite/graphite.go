@@ -6,21 +6,44 @@ import (
 	"image"
 	"image/color"
 	"io"
-	"log"
-	"math/rand"
 	"strconv"
 	"strings"
 	"time"
+
+	"math"
+	"log"
+	"math/rand"
 )
 
 var (
 	RED   = color.RGBA{255, 0, 0, 255}
+	GREfEN = color.RGBA{0, 255, 0, 255}
+	BLUE  = color.RGBA{0, 0, 255, 255}
 	BLACK = color.RGBA{0, 0, 0, 255}
+
+	BLACK90 = color.RGBA{50, 50, 50, 255}
+
 )
 
 type TimeValue struct {
 	Time  time.Time
 	Value float64
+}
+
+type TVRectangle struct {
+	Min TimeValue
+	Max TimeValue
+}
+
+func TVRect(t0 time.Time, v0 float64, t1 time.Time, v1 float64) TVRectangle {
+
+	if t1.Before(t0) {
+		t0, t1 = t1, t0
+	}
+	if v0 > v1 {
+		v0, v1 = v1, v0
+	}
+	return TVRectangle{TimeValue{t0, v0}, TimeValue{t1, v1}}
 }
 
 type Metric struct {
@@ -33,124 +56,162 @@ type Metric struct {
 	TimeValues []TimeValue
 }
 
-func randColor() color.RGBA {
-	return color.RGBA{
-		uint8(rand.Uint32() % 256),
-		uint8(rand.Uint32() % 256),
-		uint8(rand.Uint32() % 256),
-		255,
-	}
-}
-func DrawRectangle(img *image.RGBA, r image.Rectangle, c color.Color) {
-	x0 := r.Min.X
-	y0 := r.Min.Y
-	x1 := r.Max.X
-	y1 := r.Max.Y
-
-	log.Printf("%d %d %d %d\n", x0, y0, x0, y1)
-	log.Printf("%d %d %d %d\n", x0, y1, x1, y1)
-	log.Printf("%d %d %d %d\n", x1, y1, x1, y0)
-	log.Printf("%d %d %d %d\n", x1, y0, x0, y0)
-
-	drawLine(img, x0, y0, x0, y1, c)
-	drawLine(img, x0, y1, x1, y1, c)
-	drawLine(img, x1, y1, x1, y0, c)
-	drawLine(img, x1, y0, x0, y0, c)
+func (m *Metric) TVRectangle() TVRectangle {
+	return TVRect(m.Start, m.MinValue, m.End, m.MaxValue)
 }
 
-func drawLineP(img *image.RGBA, min, max image.Point, c color.Color) {
-	drawLine(img, min.X, min.Y, max.X, max.Y, c)
+type tMapper func(time.Time) int
+type vMapper func(float64) int
+
+func hrFloor(t time.Time) time.Time{
+	return t.Add(-time.Duration(t.Minute())*time.Minute)
+	return t
 }
 
-func drawLine(img *image.RGBA, x0, y0, x1, y1 int, c color.Color) {
+func setupImageLines(img *image.RGBA, tvr TVRectangle, fx tMapper, fy vMapper) {
 
-	if x1 < x0 {
-		//x0 should be first
-		x0, x1 = x1, x0
-		y0, y1 = y1, y0
-	} else if x1 == x0 {
-		//vertical line
-		if y0 <= y1 {
-			for y := y0; y <= y1; y++ {
-				img.Set(x0, y, c)
-			}
-		} else {
-			for y := y1; y <= y0; y++ {
-				img.Set(x0, y, c)
-			}
-		}
-		return
+	t0 := tvr.Min.Time
+	t1 := tvr.Max.Time
+	v0 := tvr.Min.Value
+	v1 := tvr.Max.Value
+
+	// bg
+	FillRectangle(img, img.Bounds(), BLACK)
+
+	// draw hour lines
+	t := hrFloor(t0)
+	tstep := time.Hour*time.Duration(int(hrFloor(t1).Sub(t).Hours()/6))
+	for t.Before(t1) {
+		x := fx(t)
+		DrawText(img,x+5,fy(v0)-2,t.Format("01/02/2006 15:04"),RED)
+		DrawLine(img, x, fy(v0), x, fy(v1), BLACK90)
+		t = t.Add(tstep)
 	}
 
-	slope := float64(y1-y0) / float64(x1-x0)
-	b := float64(y0) - slope*float64(x0)
-
-	for x := x0; x <= x1; x++ {
-		y := slope*float64(x) + b
-		img.Set(x, int(y), c)
-	}
-
-	if y0 <= y1 {
-		for y := y0; y <= y1; y++ {
-			x := (float64(y) - b) / slope
-			img.Set(int(x), y, c)
-		}
-	} else {
-		for y := y1; y <= y0; y++ {
-			x := (float64(y) - b) / slope
-			img.Set(int(x), y, c)
-		}
+	// draw val lines
+	v := tvr.Min.Value
+	step := (v1 - v0) / 5
+	for v < v1 {
+		y := fy(v)
+		DrawLine(img, fx(t0), y, fx(t1), y, BLACK90)
+		v += step
 	}
 }
+func genMappers(r image.Rectangle, tvr TVRectangle) (tMapper, vMapper, error) {
 
-func (m *Metric) Image(r image.Rectangle, t0 time.Time, v0 float64, t1 time.Time, v1 float64) *image.RGBA {
-
-	if t1.Before(t0) {
-		log.Fatal("t1 < t0")
+	fx, err := genTMapper(r, tvr)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	img := image.NewRGBA(r)
-	rr := r
-	rr.Max.X = rr.Max.X - 1
-	rr.Max.Y = rr.Max.Y - 1
-	DrawRectangle(img, rr, BLACK)
-
-
-	m.Start.Sub(t0)
-
-	//xFactor := float64(r.Dx()) / float64(m.End.Unix()- m.Start.Unix())
-	xFactor := float64(r.Dx()) / float64(t1.Sub(t0))
-	yFactor := float64(r.Dy()) / float64(m.MaxValue-m.MinValue)
-	if (m.MaxValue - m.MinValue) == 0 {
-		yFactor = 1
+	fy, err := genVMapper(r, tvr)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	var cur image.Point
 
-	tOffset := m.Start.Sub(t0)
+	return fx, fy, nil
+}
 
+func genTMapper(r image.Rectangle, tvr TVRectangle) (tMapper, error) {
+
+	// x transformation
+	mx, bx, err := slopeIntercept(float64(tvr.Min.Time.Unix()), float64(r.Min.X), float64(tvr.Max.Time.Unix()), float64(r.Max.X))
+	if err != nil {
+		return nil, err
+	}
+
+	return func(t time.Time) int {
+		return int(mx*float64(t.Unix()) + bx)
+	}, nil
+}
+
+func genVMapper(r image.Rectangle, tvr TVRectangle) (vMapper, error) {
+
+	// y transformation
+	my, by, err := slopeIntercept(tvr.Min.Value, float64(r.Min.Y), tvr.Max.Value, float64(r.Max.Y))
+	if err != nil {
+		return nil, err
+	}
+
+	return func(v float64) int {
+		return r.Max.Y - int(my*v+by)
+	}, nil
+}
+
+
+
+func (m *Metric) Paint(img *image.RGBA, tvr TVRectangle, c color.RGBA) error {
+
+	fx, fy, err := genMappers(img.Bounds(), tvr)
+	if err != nil {
+		return err
+	}
+
+	var p0 image.Point
 	for i, tv := range m.TimeValues {
-
-		//x := xFactor * float64(tOffset+tv.Time.Sub(m.Start))
-		x := xFactor * float64(tOffset+tv.Time.Sub(m.Start))
-		next := image.Point{
-			X: int(x),
-			//X: int(float64(int64(tv.Time.Sub(m.Start) -tOffset)) * xFactor),
-			Y: int((tv.Value - m.MinValue) * yFactor),
-			//X: int(float64(int64(t.Sub(rd.Start))) * xFactor),
-			//Y: int((v.Value - rd.MinValue) * yFactor),
-		}
-
+		p1 := image.Point{fx(tv.Time), fy(tv.Value)}
 		if i > 0 {
-			///draw x,y
-			drawLineP(img, cur, next, RED)
+			DrawLineP(img, p0, p1, c)
+		} else {
+			DrawText(img,p1.X,p1.Y,m.Name,RED)
 		}
-		cur = next
+		p0 = p1
+	}
+	return nil
+}
 
+func  PaintMetrics( img *image.RGBA, tvr TVRectangle, metrics []*Metric) error {
+
+	rand.Seed(time.Now().Unix())
+	fx, fy, err := genMappers(img.Bounds(), tvr)
+	if err != nil {
+		return err
+	}
+	setupImageLines(img, tvr,fx,fy)
+
+	for _, m := range metrics {
+		err := m.Paint(img, tvr, randColor())
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
+	return nil
+}
 
-	return img
+func (m *Metric) Image(r image.Rectangle, tvr TVRectangle, c color.RGBA) (*image.RGBA, error) {
+	img := image.NewRGBA(r)
+
+	err := m.Paint(img, tvr, c)
+	return img, err
+}
+
+func CalculateBounds(metrics []*Metric) TVRectangle {
+	var ret TVRectangle
+
+	if len(metrics) == 0 {
+		return ret
+	}
+
+	for i, m := range metrics {
+		if i == 0 {
+			ret = metrics[0].TVRectangle()
+			continue
+		}
+
+		ret.Min.Value = math.Min(ret.Min.Value, m.MinValue)
+		ret.Max.Value = math.Max(ret.Max.Value, m.MaxValue)
+
+		if m.Start.Before(ret.Min.Time) {
+			ret.Min.Time = m.Start
+		}
+
+		if ret.Max.Time.Before(m.End) {
+			ret.Max.Time = m.End
+		}
+	}
+	return ret
 }
 
 func ParseMetrics(r *bufio.Reader) ([]*Metric, error) {

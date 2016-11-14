@@ -154,7 +154,7 @@ func (rd *RawData) Image(r image.Rectangle) image.Image {
 			X: int(float64(int64(t.Sub(rd.Start))) * xFactor),
 			Y: int((v - rd.DataMin) * yFactor),
 		}
-		drawLineP(m, cur, next, color.RGBA{255, 0, 0, 255})
+		DrawLineP(m, cur, next, color.RGBA{255, 0, 0, 255})
 		cur = next
 		t = t.Add(rd.Step)
 	}
