@@ -1,0 +1,11 @@
+#!/bin/bash
+
+rm -rf ./models
+mkdir ./models
+xo mysql://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOSTNAME}:${DB_PORT}/${DB_DATABASE} -o models
+xo mysql://${DB_USERNAME}:${DB_PASSWORD}@${DB_HOSTNAME}:${DB_PORT}/${DB_DATABASE} -N -M -B -T Egos -o models/ << ENDSQL
+SELECT
+ p.first,p.middle,p.last,p.id,p.ego_id,e.name AS ego
+FROM person p
+ INNER JOIN ego e on p.ego_id = e.id
+ENDSQL
