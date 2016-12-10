@@ -10,19 +10,19 @@ import (
 	"strings"
 	"time"
 
-	"math"
+	"encoding/json"
 	"log"
+	"math"
 	"math/rand"
 )
 
 var (
-	RED   = color.RGBA{255, 0, 0, 255}
-	GREfEN = color.RGBA{0, 255, 0, 255}
-	BLUE  = color.RGBA{0, 0, 255, 255}
-	BLACK = color.RGBA{0, 0, 0, 255}
+	RED    = color.RGBA{255, 0, 0, 255}
+	GREEEN = color.RGBA{0, 255, 0, 255}
+	BLUE   = color.RGBA{0, 0, 255, 255}
+	BLACK  = color.RGBA{0, 0, 0, 255}
 
-	BLACK90 = color.RGBA{50, 50, 50, 255}
-
+	BLACK50 = color.RGBA{50, 50, 50, 255}
 )
 
 type TimeValue struct {
@@ -46,7 +46,7 @@ func TVRect(t0 time.Time, v0 float64, t1 time.Time, v1 float64) TVRectangle {
 	return TVRectangle{TimeValue{t0, v0}, TimeValue{t1, v1}}
 }
 
-type Metric struct {
+type MetricData struct {
 	Name       string
 	Start      time.Time     `json:"start"`
 	End        time.Time     `json:"end"`
@@ -56,15 +56,15 @@ type Metric struct {
 	TimeValues []TimeValue
 }
 
-func (m *Metric) TVRectangle() TVRectangle {
+func (m *MetricData) TVRectangle() TVRectangle {
 	return TVRect(m.Start, m.MinValue, m.End, m.MaxValue)
 }
 
 type tMapper func(time.Time) int
 type vMapper func(float64) int
 
-func hrFloor(t time.Time) time.Time{
-	return t.Add(-time.Duration(t.Minute())*time.Minute)
+func hrFloor(t time.Time) time.Time {
+	return t.Add(-time.Duration(t.Minute()) * time.Minute)
 	return t
 }
 
@@ -80,20 +80,23 @@ func setupImageLines(img *image.RGBA, tvr TVRectangle, fx tMapper, fy vMapper) {
 
 	// draw hour lines
 	t := hrFloor(t0)
-	tstep := time.Hour*time.Duration(int(hrFloor(t1).Sub(t).Hours()/6))
+	tstep := time.Hour * time.Duration(int(hrFloor(t1).Sub(t).Hours()/6))
 	for t.Before(t1) {
 		x := fx(t)
-		DrawText(img,x+5,fy(v0)-2,t.Format("01/02/2006 15:04"),RED)
-		DrawLine(img, x, fy(v0), x, fy(v1), BLACK90)
+		DrawText(img, x+5, fy(v0)-2, t.Format("01/02/2006 15:04"), RED)
+		DrawLine(img, x, fy(v0), x, fy(v1), BLACK50)
 		t = t.Add(tstep)
 	}
 
 	// draw val lines
-	v := tvr.Min.Value
 	step := (v1 - v0) / 5
+
+	v := tvr.Min.Value
 	for v < v1 {
+		//x := fx(t)
 		y := fy(v)
-		DrawLine(img, fx(t0), y, fx(t1), y, BLACK90)
+		DrawLine(img, fx(t0), y, fx(t1), y, BLACK50)
+		DrawText(img, fx(t0), y+5, fmt.Sprintf("%f", v), RED)
 		v += step
 	}
 }
@@ -108,7 +111,6 @@ func genMappers(r image.Rectangle, tvr TVRectangle) (tMapper, vMapper, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-
 
 	return fx, fy, nil
 }
@@ -139,9 +141,9 @@ func genVMapper(r image.Rectangle, tvr TVRectangle) (vMapper, error) {
 	}, nil
 }
 
+func (m *MetricData) Paint(img *image.RGBA, tvr TVRectangle, c color.RGBA) error {
 
-
-func (m *Metric) Paint(img *image.RGBA, tvr TVRectangle, c color.RGBA) error {
+	resolution := 1 //must be >0 and btw this is inaccurately named (paint every rth value)
 
 	fx, fy, err := genMappers(img.Bounds(), tvr)
 	if err != nil {
@@ -151,24 +153,29 @@ func (m *Metric) Paint(img *image.RGBA, tvr TVRectangle, c color.RGBA) error {
 	var p0 image.Point
 	for i, tv := range m.TimeValues {
 		p1 := image.Point{fx(tv.Time), fy(tv.Value)}
+
 		if i > 0 {
-			DrawLineP(img, p0, p1, c)
+			if i%resolution == 0 {
+				DrawLineP(img, p0, p1, c)
+				p0 = p1
+			}
 		} else {
-			DrawText(img,p1.X,p1.Y,m.Name,RED)
+			DrawText(img, p1.X, p1.Y, m.Name, RED)
+			p0 = p1
 		}
-		p0 = p1
+
 	}
 	return nil
 }
 
-func  PaintMetrics( img *image.RGBA, tvr TVRectangle, metrics []*Metric) error {
+func PaintMetrics(img *image.RGBA, tvr TVRectangle, metrics []*MetricData) error {
 
 	rand.Seed(time.Now().Unix())
 	fx, fy, err := genMappers(img.Bounds(), tvr)
 	if err != nil {
 		return err
 	}
-	setupImageLines(img, tvr,fx,fy)
+	setupImageLines(img, tvr, fx, fy)
 
 	for _, m := range metrics {
 		err := m.Paint(img, tvr, randColor())
@@ -180,14 +187,14 @@ func  PaintMetrics( img *image.RGBA, tvr TVRectangle, metrics []*Metric) error {
 	return nil
 }
 
-func (m *Metric) Image(r image.Rectangle, tvr TVRectangle, c color.RGBA) (*image.RGBA, error) {
+func (m *MetricData) Image(r image.Rectangle, tvr TVRectangle, c color.RGBA) (*image.RGBA, error) {
 	img := image.NewRGBA(r)
 
 	err := m.Paint(img, tvr, c)
 	return img, err
 }
 
-func CalculateBounds(metrics []*Metric) TVRectangle {
+func CalculateBounds(metrics []*MetricData) TVRectangle {
 	var ret TVRectangle
 
 	if len(metrics) == 0 {
@@ -214,17 +221,18 @@ func CalculateBounds(metrics []*Metric) TVRectangle {
 	return ret
 }
 
-func ParseMetrics(r *bufio.Reader) ([]*Metric, error) {
+func ParseMetricsRAW(r *bufio.Reader) ([]*MetricData, error) {
 
-	ret := make([]*Metric, 0)
+	ret := make([]*MetricData, 0)
 
 	line, err := r.ReadString('\n')
 	for err == nil {
-		m, perr := parseMetric(line)
+		m, perr := parseMetricRAW(line)
 		if perr != nil {
-			return ret, perr
+			log.Printf("%s\n", perr)
+		} else {
+			ret = append(ret, m)
 		}
-		ret = append(ret, m)
 		line, err = r.ReadString('\n')
 	}
 
@@ -234,23 +242,82 @@ func ParseMetrics(r *bufio.Reader) ([]*Metric, error) {
 	return ret, nil
 }
 
-func parseMetric(data string) (*Metric, error) {
+func ParseMetricsJSON(data []byte) ([]*MetricData, error) {
+
+	ret := make([]*MetricData, 0)
+
+	parsed := make ( []GMetricDataJSON, 0)
+	err := json.Unmarshal(data, &parsed)
+	if err != nil {
+		return ret, err
+	}
+
+	for _, gm := range parsed {
+		m := &MetricData{
+			TimeValues: make([]TimeValue, 0),
+		}
+		m.Name = gm.Target
+		m.Start = time.Now()
+		m.End = time.Unix(0, 0)
+
+		for _, tv := range gm.Datapoints {
+			if len(tv) != 2 || tv[0] == nil || tv[1] == nil {
+				continue
+			}
+			v := *tv[0]
+			t := time.Unix(int64(*tv[1]), 0)
+
+			if t.Before(m.Start) {
+				m.Start = t
+			}
+			if t.After(m.End) {
+				m.End = t
+			}
+
+			if len(tv) == 0 {
+				m.MinValue = v
+				m.MaxValue = v
+			}
+
+			if m.MinValue > v {
+				m.MinValue = v
+			}
+			if m.MaxValue < v {
+				m.MaxValue = v
+			}
+
+			m.TimeValues = append(m.TimeValues, TimeValue{
+				Time:  t,
+				Value: v,
+			})
+		}
+		ret = append(ret, m)
+	}
+	return ret, nil
+}
+
+type GMetricDataJSON struct {
+	Datapoints [][]*float64 `json:"datapoints"`
+	Target     string       `json:"target"`
+}
+
+func parseMetricRAW(data string) (*MetricData, error) {
 
 	data = strings.Trim(data, " \n\t")
 
-	ret := &Metric{
+	ret := &MetricData{
 		TimeValues: make([]TimeValue, 0),
 	}
 
 	fields := strings.Split(data, "|")
 	if len(fields) != 2 {
-		return nil, fmt.Errorf("incorrect format")
+		return nil, fmt.Errorf("%d: incorrect format: %s", len(fields), data)
 	}
 	dataPoints := strings.Split(fields[1], ",")
 	fields = strings.Split(fields[0], ",")
 
 	if len(fields) != 4 {
-		return nil, fmt.Errorf("unexpected format")
+		return nil, fmt.Errorf("%d: unexpected format %v", len(fields), fields)
 	}
 
 	ret.Name = fields[0]
@@ -280,7 +347,6 @@ func parseMetric(data string) (*Metric, error) {
 			if err != nil {
 				return nil, err
 			}
-
 			ret.TimeValues = append(ret.TimeValues, TimeValue{
 				Time:  t,
 				Value: fp,
