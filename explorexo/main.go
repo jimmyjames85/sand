@@ -64,17 +64,4 @@ func main() {
 			log.Fatalf("failed to update jim: %v\n", err)
 		}
 	}
-
-	
-	//jim.Middle = ""
-	//newname := models.Person{
-	//	Last:"Tappe",
-	//	First:"James",
-	//	Middle:"M",
-	//}
-	//
-	//if err = newname.Save(db); err != nil {
-	//	log.Fatal(err)
-	//}
-
 }
