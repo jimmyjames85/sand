@@ -9,6 +9,7 @@ import (
 
 	"github.com/jimmyjames85/sand/explorexo/models"
 	"github.com/kelseyhightower/envconfig"
+	"os/exec"
 )
 
 type dbConfig struct {
